@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: sb-retry <inbox_id>"
+  exit 1
+fi
+
+iid="$1"
+if ! [[ "$iid" =~ ^[0-9]+$ ]]; then
+  echo "inbox_id must be a number"
+  exit 1
+fi
+
+sqlite3 "$DB" <<SQL
+UPDATE inbox
+SET status='unprocessed', error='', confidence=NULL, category=NULL
+WHERE id=$iid;
+INSERT INTO log_events (event, inbox_id, details) VALUES ('retry', $iid, 'requeued');
+SQL
+
+echo "inbox $iid requeued"

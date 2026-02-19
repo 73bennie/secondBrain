@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+if [[ $# -lt 1 ]]; then
+  echo 'Usage: sb-search "query" [--section inbox|projects|admin|people|ideas|log]'
+  exit 1
+fi
+
+section="all"
+query_parts=()
+
+# Robust arg parsing
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --section)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --section requires a value"
+        exit 1
+      fi
+      section="$2"
+      shift 2
+      ;;
+    --section=*)
+      section="${1#*=}"
+      shift
+      ;;
+    *)
+      query_parts+=("$1")
+      shift
+      ;;
+  esac
+done
+
+q="${query_parts[*]}"
+if [[ -z "${q// }" ]]; then
+  echo "Missing search query"
+  exit 1
+fi
+
+# escape single quotes for SQLite string literal
+q_esc=$(printf "%s" "$q" | sed "s/'/''/g")
+
+print_header() {
+  echo
+  echo "================= SECOND BRAIN SEARCH ================="
+  echo "Query: $q"
+  echo "Section: $section"
+  echo "-------------------------------------------------------"
+  echo
+}
+
+print_footer() {
+  echo "======================================================="
+  echo
+}
+
+search_inbox() {
+  echo "📥 INBOX"
+  sqlite3 -column -header "$DB" "
+  SELECT id,
+         substr(raw_text,1,90) AS raw_text,
+         status,
+         category,
+         confidence,
+         created_at
+  FROM inbox
+  WHERE lower(raw_text) LIKE '%' || lower('$q_esc') || '%'
+     OR lower(coalesce(error,'')) LIKE '%' || lower('$q_esc') || '%'
+     OR lower(coalesce(category,'')) LIKE '%' || lower('$q_esc') || '%'
+  ORDER BY created_at DESC
+  LIMIT 50;
+  "
+  echo
+}
+
+search_projects() {
+  echo "🚀 PROJECTS"
+  sqlite3 -column -header "$DB" "
+  SELECT id,
+         substr(name,1,40) AS name,
+         status,
+         substr(coalesce(next_action,''),1,60) AS next_action,
+         updated_at
+  FROM projects
+  WHERE lower(name) LIKE '%' || lower('$q_esc') || '%'
+     OR lower(coalesce(next_action,'')) LIKE '%' || lower('$q_esc') || '%'
+     OR lower(coalesce(notes,'')) LIKE '%' || lower('$q_esc') || '%'
+  ORDER BY updated_at DESC
+  LIMIT 50;
+  "
+  echo
+}
+
+search_admin() {
+  echo "🧾 ADMIN"
+  sqlite3 -column -header "$DB" "
+  SELECT id,
+         substr(task,1,80) AS task,
+         due_date,
+         status,
+         created_at
+  FROM admin
+  WHERE lower(task) LIKE '%' || lower('$q_esc') || '%'
+  ORDER BY created_at DESC
+  LIMIT 50;
+  "
+  echo
+}
+
+search_people() {
+  echo "👥 PEOPLE"
+  sqlite3 -column -header "$DB" "
+  SELECT id,
+         name,
+         substr(coalesce(context,''),1,50) AS context,
+         substr(coalesce(follow_up,''),1,60) AS follow_up,
+         updated_at
+  FROM people
+  WHERE lower(name) LIKE '%' || lower('$q_esc') || '%'
+     OR lower(coalesce(context,'')) LIKE '%' || lower('$q_esc') || '%'
+     OR lower(coalesce(follow_up,'')) LIKE '%' || lower('$q_esc') || '%'
+  ORDER BY updated_at DESC
+  LIMIT 50;
+  "
+  echo
+}
+
+search_ideas() {
+  echo "💡 IDEAS"
+  sqlite3 -column -header "$DB" "
+  SELECT id,
+         substr(title,1,50) AS title,
+         substr(coalesce(one_liner,''),1,70) AS one_liner,
+         created_at
+  FROM ideas
+  WHERE lower(title) LIKE '%' || lower('$q_esc') || '%'
+     OR lower(coalesce(one_liner,'')) LIKE '%' || lower('$q_esc') || '%'
+     OR lower(coalesce(notes,'')) LIKE '%' || lower('$q_esc') || '%'
+  ORDER BY created_at DESC
+  LIMIT 50;
+  "
+  echo
+}
+
+search_log() {
+  echo "🧾 LOG EVENTS"
+  sqlite3 -column -header "$DB" "
+  SELECT id,
+         ts,
+         event,
+         inbox_id,
+         substr(coalesce(details,''),1,90) AS details
+  FROM log_events
+  WHERE lower(event) LIKE '%' || lower('$q_esc') || '%'
+     OR lower(coalesce(details,'')) LIKE '%' || lower('$q_esc') || '%'
+  ORDER BY ts DESC
+  LIMIT 50;
+  "
+  echo
+}
+
+print_header
+
+case "$section" in
+  all)
+    search_inbox
+    search_projects
+    search_admin
+    search_people
+    search_ideas
+    search_log
+    ;;
+  inbox) search_inbox ;;
+  projects) search_projects ;;
+  admin) search_admin ;;
+  people) search_people ;;
+  ideas) search_ideas ;;
+  log) search_log ;;
+  *)
+    echo "Unknown section: $section"
+    echo "Valid sections: inbox, projects, admin, people, ideas, log"
+    exit 1
+    ;;
+esac
+
+print_footer

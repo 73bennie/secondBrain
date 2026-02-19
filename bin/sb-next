@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+if [[ $# -lt 2 ]]; then
+  echo 'Usage: sb-next <project_id> "next action"'
+  exit 1
+fi
+
+pid="$1"; shift
+if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+  echo "project_id must be a number"
+  exit 1
+fi
+
+text="$*"
+esc=$(printf "%s" "$text" | sed "s/'/''/g")
+
+sqlite3 "$DB" <<SQL
+UPDATE projects SET next_action='$esc', updated_at=datetime('now') WHERE id=$pid;
+INSERT INTO log_events (event, details) VALUES ('set_next_action', 'project $pid');
+SQL
+
+echo "set next action for project $pid: $text"

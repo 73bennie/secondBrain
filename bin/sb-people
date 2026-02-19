@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+sqlite3 -column -header "$DB" "
+SELECT id, name, follow_up, last_contact, updated_at
+FROM people
+WHERE follow_up IS NOT NULL AND trim(follow_up) != ''
+ORDER BY updated_at DESC;
+"

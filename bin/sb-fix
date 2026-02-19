@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+if [[ $# -lt 2 ]]; then
+  echo "Usage:"
+  echo "  sb-fix <inbox_id> <category> [extra]"
+  echo
+  echo "Examples:"
+  echo "  sb-fix 4 people Mom"
+  echo "  sb-fix 7 admin \"renew car registration\""
+  echo "  sb-fix 9 projects \"pldl: show track name\""
+  exit 1
+fi
+
+id="$1"; shift
+if ! [[ "$id" =~ ^[0-9]+$ ]]; then
+  echo "inbox_id must be a number"
+  exit 1
+fi
+catg="$1"; shift
+rest="$*"
+
+# escape single quotes
+esc() { printf "%s" "$1" | sed "s/'/''/g"; }
+
+raw=$(sqlite3 "$DB" "SELECT raw_text FROM inbox WHERE id=$id;")
+if [[ -z "$raw" ]]; then
+  echo "No inbox item with id $id"
+  exit 1
+fi
+
+case "$catg" in
+  people)
+    name="${rest:-}"
+    if [[ -z "$name" ]]; then
+      echo "For people, provide a name: sb-fix $id people \"Mom\""
+      exit 1
+    fi
+    sqlite3 "$DB" <<SQL
+INSERT INTO people (name, context, follow_up, last_contact, updated_at)
+VALUES ('$(esc "$name")', '', '$(esc "$raw")', '', datetime('now'));
+UPDATE inbox SET status='processed', category='people', confidence=1.0, error='' WHERE id=$id;
+INSERT INTO log_events (event, inbox_id, details) VALUES ('fix', $id, 'forced people: $(esc "$name")');
+SQL
+    ;;
+  projects)
+    pname="${rest:-$raw}"
+    sqlite3 "$DB" <<SQL
+INSERT INTO projects (name, status, next_action, notes, updated_at)
+VALUES ('$(esc "$pname")', 'active', '', '', datetime('now'));
+UPDATE inbox SET status='processed', category='projects', confidence=1.0, error='' WHERE id=$id;
+INSERT INTO log_events (event, inbox_id, details) VALUES ('fix', $id, 'forced projects');
+SQL
+    ;;
+
+  ideas)
+    title="${rest:-$raw}"
+    sqlite3 "$DB" <<SQL
+INSERT INTO ideas (title, one_liner, notes)
+VALUES ('$(esc "$title")', '', '');
+UPDATE inbox SET status='processed', category='ideas', confidence=1.0, error='' WHERE id=$id;
+INSERT INTO log_events (event, inbox_id, details) VALUES ('fix', $id, 'forced ideas');
+SQL
+    ;;
+
+  admin)
+    task="${rest:-$raw}"
+    sqlite3 "$DB" <<SQL
+INSERT INTO admin (task, due_date, status)
+VALUES ('$(esc "$task")', '', 'open');
+UPDATE inbox SET status='processed', category='admin', confidence=1.0, error='' WHERE id=$id;
+INSERT INTO log_events (event, inbox_id, details) VALUES ('fix', $id, 'forced admin');
+SQL
+    ;;
+  *)
+    echo "Unknown category: $catg (use people|projects|ideas|admin)"
+    exit 1
+    ;;
+esac
+
+echo "fixed inbox $id -> $catg"

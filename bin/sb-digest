@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+echo
+echo "================ SECOND BRAIN DIGEST ================"
+echo "Generated: $(date)"
+echo
+
+echo "📊 SYSTEM SUMMARY"
+sqlite3 "$DB" "
+SELECT
+  (SELECT COUNT(*) FROM inbox WHERE status='unprocessed') AS unprocessed,
+  (SELECT COUNT(*) FROM inbox WHERE status='needs_review') AS needs_review,
+  (SELECT COUNT(*) FROM projects WHERE status IN ('active','waiting','blocked')) AS active_projects,
+  (SELECT COUNT(*) FROM admin WHERE status='open') AS open_admin,
+  (SELECT COUNT(*) FROM people) AS people_count,
+  (SELECT COUNT(*) FROM ideas) AS ideas_count;
+"
+echo
+
+# -----------------------------------------------------
+echo "🔴 STUCK PROJECTS (missing next_action)"
+sqlite3 -column -header "$DB" "
+SELECT id, name, status, updated_at
+FROM projects
+WHERE status IN ('active','waiting','blocked')
+  AND (next_action IS NULL OR trim(next_action) = '')
+ORDER BY updated_at DESC;
+"
+echo
+
+echo "🟡 STALE PROJECTS (no update in 7+ days)"
+sqlite3 -column -header "$DB" "
+SELECT id, name, status, updated_at
+FROM projects
+WHERE status IN ('active','waiting','blocked')
+  AND updated_at < datetime('now','-7 days')
+ORDER BY updated_at ASC;
+"
+echo
+
+# -----------------------------------------------------
+echo "⏰ ADMIN (due soon / overdue)"
+sqlite3 -column -header "$DB" "
+SELECT id, task, due_date, created_at
+FROM admin
+WHERE status='open'
+  AND due_date IS NOT NULL
+  AND trim(due_date) != ''
+ORDER BY due_date ASC, created_at DESC;
+"
+echo
+
+# -----------------------------------------------------
+echo "🚀 PROJECTS (active/waiting/blocked)"
+sqlite3 -column -header "$DB" "
+SELECT id, name, status, next_action, updated_at
+FROM projects
+WHERE status IN ('active','waiting','blocked')
+ORDER BY
+  CASE status WHEN 'active' THEN 0 WHEN 'blocked' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END,
+  updated_at DESC;
+"
+echo
+
+# -----------------------------------------------------
+echo "🧾 ADMIN (open)"
+sqlite3 -column -header "$DB" "
+SELECT id, task, due_date, created_at
+FROM admin
+WHERE status='open'
+ORDER BY (due_date IS NULL OR trim(due_date)=''), due_date ASC, created_at DESC;
+"
+echo
+
+# -----------------------------------------------------
+echo "👥 PEOPLE (with follow-ups)"
+sqlite3 -column -header "$DB" "
+SELECT id, name, follow_up, last_contact, updated_at
+FROM people
+WHERE follow_up IS NOT NULL AND trim(follow_up) != ''
+ORDER BY updated_at DESC;
+"
+echo
+
+# -----------------------------------------------------
+echo "💡 IDEAS (recent 10)"
+sqlite3 -column -header "$DB" "
+SELECT id, title, one_liner, created_at
+FROM ideas
+ORDER BY created_at DESC
+LIMIT 10;
+"
+echo
+
+# -----------------------------------------------------
+echo "📥 RECENT CAPTURED (last 15)"
+sqlite3 -column -header "$DB" "
+SELECT id, raw_text, status, category, confidence, created_at
+FROM inbox
+ORDER BY created_at DESC
+LIMIT 15;
+"
+echo
+
+# -----------------------------------------------------
+echo "⚠ NEEDS REVIEW"
+sqlite3 -column -header "$DB" "
+SELECT id, raw_text, confidence, error, created_at
+FROM inbox
+WHERE status='needs_review'
+ORDER BY created_at DESC;
+"
+echo
+
+echo "======================================================"
+echo

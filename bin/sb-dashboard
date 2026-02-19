@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+# default widths (tweak if you want)
+W1=38
+W2=60
+
+hr() { printf "%*s\n" "$(tput cols 2>/dev/null || echo 80)" "" | tr ' ' '='; }
+
+echo
+hr
+echo "SB DASHBOARD  |  $(date)"
+hr
+echo
+
+echo "COUNTS"
+
+read unprocessed needs_review active_projects open_admin < <(
+sqlite3 -separator ' ' "$DB" "
+SELECT
+  (SELECT COUNT(*) FROM inbox WHERE status='unprocessed'),
+  (SELECT COUNT(*) FROM inbox WHERE status='needs_review'),
+  (SELECT COUNT(*) FROM projects WHERE status IN ('active','waiting','blocked')),
+  (SELECT COUNT(*) FROM admin WHERE status='open');
+"
+)
+printf "  %-16s %5s\n" "Unprocessed:"     "$unprocessed"
+printf "  %-16s %5s\n" "Needs Review:"    "$needs_review"
+printf "  %-16s %5s\n" "Active Projects:" "$active_projects"
+printf "  %-16s %5s\n" "Open Admin:"      "$open_admin"
+
+echo
+
+echo "🔴 STUCK PROJECTS (missing next_action) — top 5"
+sqlite3 -column -header "$DB" "
+SELECT id,
+       substr(name,1,$W1) AS project,
+       status,
+       updated_at
+FROM projects
+WHERE status IN ('active','waiting','blocked')
+  AND (next_action IS NULL OR trim(next_action) = '')
+ORDER BY updated_at DESC
+LIMIT 5;
+"
+echo
+
+echo "⏰ ADMIN DUE SOON (has due_date) — top 5"
+sqlite3 -column -header "$DB" "
+SELECT id,
+       substr(task,1,$W2) AS task,
+       due_date
+FROM admin
+WHERE status='open'
+  AND due_date IS NOT NULL
+  AND trim(due_date) != ''
+ORDER BY due_date ASC
+LIMIT 5;
+"
+echo
+
+echo "✅ NEXT ACTIONS (projects) — top 8"
+sqlite3 -column -header "$DB" "
+SELECT id,
+       substr(name,1,$W1) AS project,
+       substr(next_action,1,$W2) AS next_action,
+       status
+FROM projects
+WHERE status IN ('active','waiting','blocked')
+  AND next_action IS NOT NULL
+  AND trim(next_action) != ''
+ORDER BY
+  CASE status WHEN 'active' THEN 0 WHEN 'blocked' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END,
+  updated_at DESC
+LIMIT 8;
+"
+echo
+
+echo "⚠ NEEDS REVIEW (inbox) — top 5"
+sqlite3 -column -header "$DB" "
+SELECT id,
+       substr(raw_text,1,$W2) AS raw,
+       confidence,
+       substr(coalesce(error,''),1,30) AS error,
+       created_at
+FROM inbox
+WHERE status='needs_review'
+ORDER BY created_at DESC
+LIMIT 5;
+"
+echo
+
+echo "TIP: use sb-next <project_id> \"...\" to unstuck a project"
+echo "TIP: use sb-retry <inbox_id> to requeue; sb-fix <inbox_id> ... to force-route"
+echo

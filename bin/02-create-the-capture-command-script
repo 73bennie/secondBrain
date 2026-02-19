@@ -1,0 +1,23 @@
+cat > ~/.secondbrain/bin/sb <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+if [[ $# -eq 0 ]]; then
+  echo "Usage: sb \"some thought\""
+  exit 1
+fi
+
+text="$*"
+
+sqlite3 "$DB" <<SQL
+INSERT INTO inbox (raw_text) VALUES ($(printf "%q" "$text"));
+INSERT INTO log_events (event, details) VALUES ('capture', 'captured');
+SQL
+
+echo "captured: $text"
+BASH
+
+chmod +x ~/.secondbrain/bin/sb
+

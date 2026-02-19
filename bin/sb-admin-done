@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: sb-admin-done <admin_id>"
+  exit 1
+fi
+
+aid="$1"
+if ! [[ "$aid" =~ ^[0-9]+$ ]]; then
+  echo "admin_id must be a number"
+  exit 1
+fi
+
+sqlite3 "$DB" <<SQL
+UPDATE admin SET status='done' WHERE id=$aid;
+INSERT INTO log_events (event, details) VALUES ('admin_done', 'admin $aid');
+SQL
+
+echo "admin $aid marked done"

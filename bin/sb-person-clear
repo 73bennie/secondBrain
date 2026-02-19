@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: sb-person-clear <person_id>"
+  exit 1
+fi
+
+pid="$1"
+if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+  echo "person_id must be a number"
+  exit 1
+fi
+
+sqlite3 "$DB" <<SQL
+UPDATE people SET follow_up='', updated_at=datetime('now') WHERE id=$pid;
+INSERT INTO log_events (event, details) VALUES ('person_clear', 'person $pid');
+SQL
+
+echo "cleared follow-up for person $pid"

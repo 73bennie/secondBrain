@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+if [[ $# -lt 2 ]]; then
+  echo 'Usage: sb-person-followup <person_id> "follow-up note"'
+  exit 1
+fi
+
+pid="$1"; shift
+if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+  echo "person_id must be a number"
+  exit 1
+fi
+
+note="$*"
+esc=$(printf "%s" "$note" | sed "s/'/''/g")
+
+sqlite3 "$DB" <<SQL
+UPDATE people SET follow_up='$esc', updated_at=datetime('now') WHERE id=$pid;
+INSERT INTO log_events (event, details) VALUES ('person_followup', 'person $pid');
+SQL
+
+echo "set follow-up for person $pid: $note"

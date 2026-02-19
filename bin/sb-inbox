@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+n="${1:-15}"
+
+if ! [[ "$n" =~ ^[0-9]+$ ]]; then
+  echo "count must be a number"
+  exit 1
+fi
+
+sqlite3 -column -header "$DB" "
+SELECT id, substr(raw_text,1,80) AS raw, status, category, confidence, created_at
+FROM inbox
+ORDER BY created_at DESC
+LIMIT $n;
+"
