@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+source "$HOME/.secondbrain/lib/sb-common.sh"
+
 set -euo pipefail
 DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
 
@@ -15,21 +17,7 @@ hr
 echo
 
 echo "COUNTS"
-
-read unprocessed needs_review active_projects open_admin < <(
-sqlite3 -separator ' ' "$DB" "
-SELECT
-  (SELECT COUNT(*) FROM inbox WHERE status='unprocessed'),
-  (SELECT COUNT(*) FROM inbox WHERE status='needs_review'),
-  (SELECT COUNT(*) FROM projects WHERE status IN ('active','waiting','blocked')),
-  (SELECT COUNT(*) FROM admin WHERE status='open');
-"
-)
-printf "  %-16s %5s\n" "Unprocessed:"     "$unprocessed"
-printf "  %-16s %5s\n" "Needs Review:"    "$needs_review"
-printf "  %-16s %5s\n" "Active Projects:" "$active_projects"
-printf "  %-16s %5s\n" "Open Admin:"      "$open_admin"
-
+sb_print_summary "$DB"
 echo
 
 echo "🔴 STUCK PROJECTS (missing next_action) — top 5"

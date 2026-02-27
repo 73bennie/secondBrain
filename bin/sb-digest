@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+source "$HOME/.secondbrain/lib/sb-common.sh"
+
 set -euo pipefail
 DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
 
@@ -8,15 +10,7 @@ echo "Generated: $(date)"
 echo
 
 echo "📊 SYSTEM SUMMARY"
-sqlite3 "$DB" "
-SELECT
-  (SELECT COUNT(*) FROM inbox WHERE status='unprocessed') AS unprocessed,
-  (SELECT COUNT(*) FROM inbox WHERE status='needs_review') AS needs_review,
-  (SELECT COUNT(*) FROM projects WHERE status IN ('active','waiting','blocked')) AS active_projects,
-  (SELECT COUNT(*) FROM admin WHERE status='open') AS open_admin,
-  (SELECT COUNT(*) FROM people) AS people_count,
-  (SELECT COUNT(*) FROM ideas) AS ideas_count;
-"
+sb_print_summary "$DB"
 echo
 
 # -----------------------------------------------------

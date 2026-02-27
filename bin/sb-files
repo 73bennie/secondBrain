@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+if [[ $# -ne 2 ]]; then
+  echo "Usage: sb-files <type> <id>"
+  exit 1
+fi
+
+etype="$1"
+eid="$2"
+sqlite3 -column -header "$DB" "
+SELECT id, label, path, created_at
+FROM attachments
+WHERE entity_type='$etype' AND entity_id=$eid
+ORDER BY created_at DESC;
+"

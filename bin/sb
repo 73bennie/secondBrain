@@ -3,12 +3,73 @@ set -euo pipefail
 
 DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
 
+# P1.1: ensure the markdown-backup table exists (idempotent)
+sqlite3 "$DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS note_store (
+  entity_type TEXT NOT NULL,
+  entity_id   INTEGER NOT NULL,
+  note_path   TEXT,
+  md_content  TEXT NOT NULL DEFAULT '',
+  mtime       INTEGER,
+  sha256      TEXT,
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (entity_type, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_note_store_note_path ON note_store(note_path);
+SQL
+
+usage() {
+  cat <<'EOF'
+Usage:
+  sb [FLAGS] <text...>
+
+Flags (choose at most ONE):
+  -a        Admin:    (routes to admin)
+  -p        Project:  (routes to projects)
+  -i        Idea:     (routes to ideas)
+  -e        Person:   (routes to people)
+  -h        Help
+
+Examples:
+  sb -a renew car registration
+  sb -p rewrite pldl downloader
+  sb -i add momentum tracking
+  sb -e mom (or: sb -e "Call mom about taxes")
+
+No flag:
+  sb <text...>    # goes to inbox as-is; sorter may use LLM fallback
+EOF
+}
+
+prefix=""
+# Parse flags
+while getopts ":apieh" opt; do
+  case "$opt" in
+    a) [[ -z "$prefix" ]] || { echo "Error: use only one category flag"; exit 1; }
+       prefix="Admin:" ;;
+    p) [[ -z "$prefix" ]] || { echo "Error: use only one category flag"; exit 1; }
+       prefix="Project:" ;;
+    i) [[ -z "$prefix" ]] || { echo "Error: use only one category flag"; exit 1; }
+       prefix="Idea:" ;;
+    e) [[ -z "$prefix" ]] || { echo "Error: use only one category flag"; exit 1; }
+       prefix="Person:" ;;
+    h) usage; exit 0 ;;
+    \?) echo "Error: unknown flag -$OPTARG"; echo; usage; exit 1 ;;
+  esac
+done
+shift $((OPTIND - 1))
+
 if [[ $# -eq 0 ]]; then
-  echo "Usage: sb \"some thought\""
+  usage
   exit 1
 fi
 
 text="$*"
+
+# Inject deterministic prefix if a flag was chosen
+if [[ -n "$prefix" ]]; then
+  text="$prefix $text"
+fi
 
 # Escape single quotes for SQLite (replace ' with '')
 escaped=$(printf "%s" "$text" | sed "s/'/''/g")
@@ -19,3 +80,4 @@ INSERT INTO log_events (event, details) VALUES ('capture', 'captured');
 SQL
 
 echo "captured: $text"
+

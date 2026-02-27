@@ -28,7 +28,6 @@ ALIASES = load_aliases()
 
 def infer_person_name(raw: str) -> str:
     s = raw.strip().lower()
-    # common patterns: "ask mom ...", "text dad ...", "call mom"
     m = re.search(r"\b(mom|mother|dad|father)\b", s)
     if m:
         key = m.group(1)
@@ -83,9 +82,6 @@ User text:
 
 
 def extract_json(s: str):
-    """
-    Try to recover JSON object even if model adds junk.
-    """
     s = s.strip()
     try:
         return json.loads(s)
@@ -124,6 +120,42 @@ def log_event(cur, event, inbox_id=None, details=""):
     )
 
 
+def pre_route(raw: str):
+    """
+    Deterministic prefix router. Returns (category, clean_text) or (None, None).
+    Supports: admin:, project(s):, idea(s):, person/people:
+    """
+    s = raw.strip()
+    low = s.lower()
+
+    def strip_prefix(pfx: str) -> str:
+        return s[len(pfx):].strip()
+
+    # admin
+    if low.startswith("admin:"):
+        return "admin", strip_prefix("admin:")
+
+    # projects
+    if low.startswith("project:"):
+        return "projects", strip_prefix("project:")
+    if low.startswith("projects:"):
+        return "projects", strip_prefix("projects:")
+
+    # ideas
+    if low.startswith("idea:"):
+        return "ideas", strip_prefix("idea:")
+    if low.startswith("ideas:"):
+        return "ideas", strip_prefix("ideas:")
+
+    # people
+    if low.startswith("person:"):
+        return "people", strip_prefix("person:")
+    if low.startswith("people:"):
+        return "people", strip_prefix("people:")
+
+    return None, None
+
+
 def main(limit=10):
     con = sqlite3.connect(DB)
     con.row_factory = sqlite3.Row
@@ -141,6 +173,70 @@ def main(limit=10):
         inbox_id = r["id"]
         raw = r["raw_text"]
 
+        # ---------- PREFIX PRE-ROUTER ----------
+        cat, clean = pre_route(raw)
+        if cat:
+            # If user wrote only "Admin:" with nothing else, bounce.
+            if not clean:
+                cur.execute(
+                    "UPDATE inbox SET status='needs_review', category=?, confidence=?, model=?, error=? WHERE id=?",
+                    (cat, 1.0, "prefix", "empty after prefix", inbox_id),
+                )
+                log_event(cur, "needs_review", inbox_id, f"prefix {cat} but empty")
+                con.commit()
+                continue
+
+            if cat == "admin":
+                cur.execute(
+                    "INSERT INTO admin (task, due_date, status) VALUES (?, ?, ?)",
+                    (clean, "", "open"),
+                )
+
+            elif cat == "projects":
+                cur.execute(
+                    "INSERT INTO projects (name, status, next_action, notes, updated_at) VALUES (?, ?, ?, ?, datetime('now'))",
+                    (clean, "active", "", "",),
+                )
+
+            elif cat == "ideas":
+                cur.execute(
+                    "INSERT INTO ideas (title, one_liner, notes) VALUES (?, ?, ?)",
+                    (clean, "", ""),
+                )
+
+            elif cat == "people":
+                # Allow "person: mom" to resolve via alias file
+                name = clean.strip()
+                if name.lower() in ALIASES:
+                    name = ALIASES[name.lower()]
+                elif name.lower() in ("mom", "mother", "dad", "father"):
+                    name = infer_person_name(name) or name.title()
+
+                if not name:
+                    cur.execute(
+                        "UPDATE inbox SET status='needs_review', category='people', confidence=?, model=?, error=? WHERE id=?",
+                        (1.0, "prefix", "missing person name", inbox_id),
+                    )
+                    log_event(cur, "needs_review", inbox_id, "missing person name (prefix)")
+                    con.commit()
+                    continue
+
+                # Store the *original* raw as follow-up context by default
+                cur.execute(
+                    "INSERT INTO people (name, context, follow_up, last_contact, updated_at) VALUES (?, ?, ?, ?, datetime('now'))",
+                    (name, "", raw, "",),
+                )
+
+            cur.execute(
+                "UPDATE inbox SET status='processed', category=?, confidence=?, model=?, error='' WHERE id=?",
+                (cat, 1.0, "prefix", inbox_id),
+            )
+            log_event(cur, "processed", inbox_id, f"prefix_route -> {cat}")
+            con.commit()
+            continue
+        # ---------- END PREFIX PRE-ROUTER ----------
+
+        # ---------- LLM ROUTING FALLBACK ----------
         result = None
         last_err = ""
 
@@ -168,7 +264,6 @@ def main(limit=10):
         confidence = float(result.get("confidence", 0.0) or 0.0)
         fields = result.get("fields", {}) or {}
 
-        # bouncer: low confidence or unknown => needs_review
         if category not in ("people", "projects", "ideas", "admin") or confidence < CONF_THRESHOLD:
             cur.execute(
                 "UPDATE inbox SET status='needs_review', category=?, confidence=?, model=?, error=? WHERE id=?",
@@ -186,11 +281,8 @@ def main(limit=10):
             con.commit()
             continue
 
-        # route to tables
         if category == "people":
             name = (fields.get("name") or "").strip()
-
-            # If the model couldn't name the person (e.g. "Ask mom..."), infer from aliases.
             if not name:
                 name = infer_person_name(raw)
 
@@ -218,9 +310,11 @@ def main(limit=10):
                 log_event(cur, "needs_review", inbox_id, "missing project name")
                 con.commit()
                 continue
+
             status = (fields.get("status") or "active").strip()
             if status not in ("active", "waiting", "blocked", "someday", "done"):
                 status = "active"
+
             cur.execute(
                 "INSERT INTO projects (name, status, next_action, notes, updated_at) VALUES (?, ?, ?, ?, datetime('now'))",
                 (name, status, fields.get("next_action", ""), fields.get("notes", "")),
@@ -236,6 +330,7 @@ def main(limit=10):
                 log_event(cur, "needs_review", inbox_id, "missing idea title")
                 con.commit()
                 continue
+
             cur.execute(
                 "INSERT INTO ideas (title, one_liner, notes) VALUES (?, ?, ?)",
                 (title, fields.get("one_liner", ""), fields.get("notes", "")),
@@ -251,9 +346,11 @@ def main(limit=10):
                 log_event(cur, "needs_review", inbox_id, "missing admin task")
                 con.commit()
                 continue
+
             status = (fields.get("status") or "open").strip()
             if status not in ("open", "done"):
                 status = "open"
+
             cur.execute(
                 "INSERT INTO admin (task, due_date, status) VALUES (?, ?, ?)",
                 (task, fields.get("due_date", ""), status),

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+if [[ $# -ne 2 ]]; then
+  echo "Usage: sb-open <admin|projects|people|ideas|inbox> <id>"
+  exit 1
+fi
+
+etype="$1"
+eid="$2"
+
+if ! [[ "$eid" =~ ^[0-9]+$ ]]; then
+  echo "id must be a number"
+  exit 1
+fi
+
+case "$etype" in
+  admin|projects|people|ideas|inbox) ;;
+  *) echo "bad type: $etype"; exit 1 ;;
+esac
+
+dir="$HOME/.secondbrain/work/$etype/$eid"
+mkdir -p "$dir"
+file="$dir/notes.md"
+
+if [[ ! -f "$file" ]]; then
+  # pull a title line from DB
+  title=$(sqlite3 "$DB" "SELECT
+    CASE '$etype'
+      WHEN 'admin' THEN task
+      WHEN 'projects' THEN name
+      WHEN 'people' THEN name
+      WHEN 'ideas' THEN title
+      WHEN 'inbox' THEN raw_text
+    END
+  FROM $etype WHERE id=$eid;")
+  {
+    echo "# $etype/$eid"
+    [[ -n "$title" ]] && echo "## $title"
+    echo
+  } > "$file"
+fi
+
+# record as attachment (idempotency not enforced; fine for now)
+sqlite3 "$DB" "INSERT INTO attachments (entity_type, entity_id, path, label) VALUES ('$etype',$eid,'$file','notes');" >/dev/null 2>&1 || true
+
+exec vim "$file"
