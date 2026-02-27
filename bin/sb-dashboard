@@ -2,6 +2,14 @@
 source "$HOME/.secondbrain/lib/sb-common.sh"
 
 set -euo pipefail
+
+# --- Phase 3: silently sync vault notes into SQLite ---
+# --- Phase 3: sync vault notes into SQLite (one-line status) ---
+sync_line=""
+if command -v sb-sync-notes >/dev/null 2>&1; then
+  sync_line="$(sb-sync-notes --quiet 2>/dev/null || true)"
+fi
+
 DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
 
 # default widths (tweak if you want)
@@ -15,6 +23,8 @@ hr
 echo "SB DASHBOARD  |  $(date)"
 hr
 echo
+
+[[ -n "${sync_line// }" ]] && echo "$sync_line" && echo
 
 echo "COUNTS"
 sb_print_summary "$DB"

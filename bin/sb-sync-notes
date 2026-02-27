@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
+
+usage() {
+  echo "Usage:"
+  echo "  sb-sync-notes"
+  echo "  sb-sync-notes --one <type> <id>"
+  echo "  sb-sync-notes --quiet"
+  exit 1
+}
+
+quiet=0
+mode="all"
+entity_type=""
+entity_id=""
+
+# ---- argument parsing (order-independent) ----
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --quiet)
+      quiet=1
+      shift
+      ;;
+    --one)
+      [[ $# -lt 3 ]] && usage
+      mode="one"
+      entity_type="$2"
+      entity_id="$3"
+      shift 3
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+updated=0
+unchanged=0
+missing=0
+
+query="
+SELECT entity_type, entity_id, path
+FROM attachments
+WHERE label='vault_notes'
+"
+
+if [[ "$mode" == "one" ]]; then
+  query="$query AND entity_type='$entity_type' AND entity_id=$entity_id"
+fi
+
+# ---- important: no pipeline (avoid subshell counters) ----
+while IFS='|' read -r type id path; do
+  [[ -z "$type" ]] && continue
+
+  if [[ ! -f "$path" ]]; then
+    ((++missing))
+    continue
+  fi
+
+  mtime=$(stat -c %Y "$path")
+  sha=$(sha256sum "$path" | awk '{print $1}')
+
+  row=$(sqlite3 -separator '|' "$DB" "
+    SELECT mtime, sha256
+    FROM note_store
+    WHERE entity_type='$type' AND entity_id=$id;
+  ")
+
+  old_mtime=""
+  old_sha=""
+
+  if [[ -n "$row" ]]; then
+    IFS='|' read -r old_mtime old_sha <<< "$row"
+  fi
+
+  if [[ "$mtime" == "$old_mtime" && "$sha" == "$old_sha" ]]; then
+    ((++unchanged))
+    continue
+  fi
+
+  content="$(cat "$path")"
+  content_sql="$(printf "%s" "$content" | sed "s/'/''/g")"
+
+  sqlite3 "$DB" <<EOF
+INSERT INTO note_store (entity_type, entity_id, md_content, mtime, sha256)
+VALUES ('$type', $id, '$content_sql', $mtime, '$sha')
+ON CONFLICT(entity_type, entity_id)
+DO UPDATE SET
+  md_content=excluded.md_content,
+  mtime=excluded.mtime,
+  sha256=excluded.sha256;
+EOF
+
+  ((++updated))
+
+done < <(sqlite3 -separator '|' "$DB" "$query")
+
+# ---- single summary line ----
+if [[ "$quiet" -eq 1 ]]; then
+  echo "sync: $updated updated / $unchanged unchanged / $missing missing"
+else
+  echo "updated: $updated  unchanged: $unchanged  missing: $missing"
+fi
+
+exit 0
