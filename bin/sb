@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Load user config if present
+CONFIG="$HOME/.secondbrain/config.sh"
+[[ -f "$CONFIG" ]] && source "$CONFIG"
+
 DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
 
 # P1.1: ensure the markdown-backup table exists (idempotent)

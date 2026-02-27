@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+COMMON="$HOME/.secondbrain/lib/sb-common.sh"
+[[ -f "$COMMON" ]] && source "$COMMON"
+
 DB="${SB_DB:-$HOME/.secondbrain/brain.db}"
 
 if [[ $# -ne 2 ]]; then
@@ -20,29 +24,53 @@ case "$etype" in
   *) echo "bad type: $etype"; exit 1 ;;
 esac
 
-dir="$HOME/.secondbrain/work/$etype/$eid"
-mkdir -p "$dir"
-file="$dir/notes.md"
+# Vault-first path selection (Mode A)
+vault_mode=0
+if [[ -n "${SB_VAULT:-}" && -n "${SB_VAULT_DIR:-}" ]] && command -v sb_vault_note_path >/dev/null 2>&1; then
+  vault_mode=1
+  file="$(sb_vault_note_path "$etype" "$eid")"
+  dir="$(dirname "$file")"
+  mkdir -p "$dir"
+else
+  # Legacy workdir behavior
+  dir="$HOME/.secondbrain/work/$etype/$eid"
+  mkdir -p "$dir"
+  file="$dir/notes.md"
+fi
 
 if [[ ! -f "$file" ]]; then
-  # pull a title line from DB
-  title=$(sqlite3 "$DB" "SELECT
-    CASE '$etype'
-      WHEN 'admin' THEN task
-      WHEN 'projects' THEN name
-      WHEN 'people' THEN name
-      WHEN 'ideas' THEN title
-      WHEN 'inbox' THEN raw_text
-    END
-  FROM $etype WHERE id=$eid;")
-  {
-    echo "# $etype/$eid"
-    [[ -n "$title" ]] && echo "## $title"
-    echo
-  } > "$file"
+  printf '# %s %s\n\n' "$etype" "$eid" > "$file"
 fi
 
 # record as attachment (idempotency not enforced; fine for now)
-sqlite3 "$DB" "INSERT INTO attachments (entity_type, entity_id, path, label) VALUES ('$etype',$eid,'$file','notes');" >/dev/null 2>&1 || true
+#sqlite3 "$DB" "INSERT INTO attachments (entity_type, entity_id, path, label) VALUES ('$etype',$eid,'$file','notes');" >/dev/null 2>&1 || true
+# Record attachment (vault vs legacy)
+label="notes"
+if [[ "$vault_mode" -eq 1 ]]; then
+  label="vault_notes"
+fi
+
+# Escape single-quotes for SQLite
+file_esc="${file//\'/\'\'}"
+label_esc="${label//\'/\'\'}"
+
+#Idempotent attachments:
+# - Always keep exactly one row for the chosen label
+# - In vault mode, also remove legacy 'notes' attachments for this entity
+sqlite3 "$DB" "
+  DELETE FROM attachments
+   WHERE entity_type='$etype'
+     AND entity_id=$eid
+     AND label='$label_esc';
+
+  DELETE FROM attachments
+   WHERE entity_type='$etype'
+     AND entity_id=$eid
+     AND label='notes'
+     AND '$label_esc'='vault_notes';
+
+  INSERT INTO attachments (entity_type, entity_id, path, label)
+  VALUES ('$etype', $eid, '$file_esc', '$label_esc');
+" >/dev/null 2>&1 || true
 
 exec vim "$file"

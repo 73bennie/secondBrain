@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Load user config if present
+CONFIG="$HOME/.secondbrain/config.sh"
+[[ -f "$CONFIG" ]] && source "$CONFIG"
+
+sb_vault_note_path() {
+  local type="${1:?entity_type required (ideas/projects/admin/people/...)}"
+  local id="${2:?entity_id required}"
+
+  : "${SB_VAULT:?SB_VAULT is not set (check ~/.secondbrain/config.sh)}"
+  : "${SB_VAULT_DIR:?SB_VAULT_DIR is not set (check ~/.secondbrain/config.sh)}"
+
+  # Canonical path: <vault>/<dir>/<type>/<id>.md
+  printf '%s/%s/%s/%s.md\n' \
+    "${SB_VAULT%/}" \
+    "${SB_VAULT_DIR#/}" \
+    "$type" \
+    "$id"
+}
+
 sb_print_summary() {
   local DB="$1"
 
